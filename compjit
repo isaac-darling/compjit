@@ -1,0 +1,71 @@
+#!/usr/bin/python3
+
+from numpy import std
+import sys
+
+#decorator that takes function whose errors have standard messages and >&2
+def exception_to_stderr(func):
+    def wrapper():
+        try:
+            func()
+        except Exception as e:
+            print(f"compjit: {e.args[0]}", file = sys.stderr)
+    return wrapper
+
+#compute and output jitter to stdout
+def compute_jitter(input_stream) -> None:
+    input_lines = input_stream.readlines()
+    AVG_LATENCY = float()
+    diff_dict = {}
+    prev_id = 0
+    prev_val = None
+    output = list(input_lines)
+
+    #add elements to diff_list
+    for line in input_lines:
+        if "icmp_seq" not in line:
+            continue
+        else:
+            curr_id = int(line[line.index("icmp_seq=")+9:line.index("ttl=")])
+            curr_val = float(line[line.index("time=")+5:line.index("ms")])
+            if curr_id == prev_id+1 and prev_val is not None:
+                diff_dict[curr_id] = abs(round(curr_val-prev_val, 2))
+            prev_id = curr_id
+            prev_val = curr_val
+
+    idx = 0
+    keys = list(diff_dict.keys())
+    for i in range(len(output)):
+        if f"icmp_seq={keys[idx]}" in output[i]:
+            color = ""
+            output[i] = f"{output[i][:-1]} {color}delta={diff_dict[keys[idx]]:3.2f}\e[0m ms\n"
+            idx += 1 if idx < len(keys) - 1 else 0
+        elif "icmp_seq" in output[i]:
+            output[i] = f"{output[i][:-1]} delta={'NaN':^4} ms\n"
+
+    vals = list(diff_dict.values())
+    output.append(f"\ndelta min/avg/max/stdev = {min(vals)}/{sum(vals)/len(diff_dict):.3f}/{max(vals)}/{std(vals):.3f} ms")
+
+    print("".join(output).replace("ping ", ""))
+
+#user can pipe to the utility or provide a filename
+@exception_to_stderr
+def main() -> None:
+    input_stream = sys.stdin if not sys.stdin.isatty() else None
+
+    if input_stream is None:
+        try:
+            input_filename = sys.argv[1]
+        except IndexError:
+            raise ValueError("no input stream provided\nTry 'compjit --help' for more information.")
+
+        try:
+            with open(input_filename, "r") as input_stream:
+                compute_jitter(input_stream)
+        except OSError as e:
+            raise ValueError(f"{type(e).__name__}: [Errno {e.errno}] {e.strerror}: '{e.filename}'")
+    else:
+        compute_jitter(input_stream)
+
+if __name__=="__main__":
+    main()
